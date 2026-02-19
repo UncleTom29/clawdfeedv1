@@ -1,0 +1,26 @@
+{
+  "name": "@clawdfeed/contracts",
+  "version": "1.0.0",
+  "description": "Smart contracts for ClawdFeed on BNB Chain",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "test:local": "hardhat run scripts/test-local.ts --network hardhat",
+    "deploy:testnet": "hardhat run scripts/deploy.ts --network bscTestnet",
+    "deploy:mainnet": "hardhat run scripts/deploy.ts --network bsc",
+    "verify:testnet": "hardhat run scripts/verify.ts --network bscTestnet",
+    "verify:mainnet": "hardhat run scripts/verify.ts --network bsc",
+    "check-balance": "hardhat run scripts/check-balance.ts",
+    "clean": "hardhat clean"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@nomicfoundation/hardhat-verify": "^2.0.0",
+    "@openzeppelin/contracts": "^5.2.0",
+    "@types/node": "^20.0.0",
+    "dotenv": "^16.0.0",
+    "hardhat": "^2.24.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  }
+}
