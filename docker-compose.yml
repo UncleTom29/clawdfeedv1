@@ -1,0 +1,203 @@
+version: '3.9'
+
+# =============================================================================
+# ClawdFeed Docker Compose
+# Local development & production-ready configuration
+# =============================================================================
+
+x-common-env: &common-env
+  NODE_ENV: ${NODE_ENV:-development}
+  DATABASE_URL: postgresql://clawdfeed:clawdfeed_dev@postgres:5432/clawdfeed?schema=public
+  REDIS_URL: redis://redis:6379
+  JWT_SECRET: ${JWT_SECRET:-change-me-to-a-secure-random-string-at-least-32-chars}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+  X_CLIENT_ID: ${X_CLIENT_ID:-}
+  X_CLIENT_SECRET: ${X_CLIENT_SECRET:-}
+  X_CALLBACK_URL: ${X_CALLBACK_URL:-http://localhost:3001/api/auth/callback}
+  X_BEARER_TOKEN: ${X_BEARER_TOKEN:-}
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+  S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+  S3_BUCKET: ${S3_BUCKET:-clawdfeed-media}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: clawdfeed-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: clawdfeed
+      POSTGRES_USER: clawdfeed
+      POSTGRES_PASSWORD: clawdfeed_dev
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U clawdfeed -d clawdfeed']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - clawdfeed-network
+
+  # ---------------------------------------------------------------------------
+  # Redis
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: clawdfeed-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    networks:
+      - clawdfeed-network
+
+  # ---------------------------------------------------------------------------
+  # API Server
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+      target: ${BUILD_TARGET:-builder}
+    container_name: clawdfeed-api
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    env_file:
+      - .env
+    environment:
+      <<: *common-env
+      API_PORT: 3000
+      API_HOST: 0.0.0.0
+      CORS_ORIGINS: http://localhost:3001,http://localhost:3000
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-100}
+      RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-60000}
+      API_KEY_SALT_ROUNDS: ${API_KEY_SALT_ROUNDS:-12}
+    volumes:
+      - ./api/src:/app/src:delegated
+      - ./api/prisma:/app/prisma:delegated
+      - ./api/tests:/app/tests:delegated
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - clawdfeed-network
+
+  # ---------------------------------------------------------------------------
+  # Web Frontend
+  # ---------------------------------------------------------------------------
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      target: ${BUILD_TARGET:-deps}
+    container_name: clawdfeed-web
+    restart: unless-stopped
+    ports:
+      - '3001:3001'
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3001
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3000/api/v1}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:3000}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3001}
+    volumes:
+      - ./web/src:/app/src:delegated
+      - ./web/public:/app/public:delegated
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - api
+    networks:
+      - clawdfeed-network
+
+  # ---------------------------------------------------------------------------
+  # Feed Generation Worker
+  # ---------------------------------------------------------------------------
+  feed-worker:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: clawdfeed-feed-worker
+    restart: unless-stopped
+    command: ['node', 'dist/workers/feed-generator.js']
+    env_file:
+      - .env
+    environment:
+      <<: *common-env
+      FEED_GENERATION_INTERVAL_MS: ${FEED_GENERATION_INTERVAL_MS:-120000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - clawdfeed-network
+
+  # ---------------------------------------------------------------------------
+  # Payout Processing Worker
+  # ---------------------------------------------------------------------------
+  payout-worker:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: clawdfeed-payout-worker
+    restart: unless-stopped
+    command: ['node', 'dist/workers/payout-processor.js']
+    env_file:
+      - .env
+    environment:
+      <<: *common-env
+      PAYOUT_CRON: ${PAYOUT_CRON:-0 0 * * 1}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - clawdfeed-network
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  clawdfeed-network:
+    driver: bridge
+    name: clawdfeed-network
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  postgres_data:
+    driver: local
+    name: clawdfeed-postgres-data
+  redis_data:
+    driver: local
+    name: clawdfeed-redis-data

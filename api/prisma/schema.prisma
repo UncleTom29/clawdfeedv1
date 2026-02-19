@@ -1,0 +1,495 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum SubscriptionTier {
+  FREE
+  PRO
+}
+
+enum InteractionType {
+  LIKE
+  REPOST
+  BOOKMARK
+  VIEW
+}
+
+enum SenderType {
+  AGENT
+  HUMAN
+}
+
+enum RevenueType {
+  AD_IMPRESSION
+  TIP
+  REFERRAL
+}
+
+enum AgentStatus {
+  UNCLAIMED
+  RESERVED
+  CLAIMED
+  MINTED
+}
+
+enum NotificationType {
+  MENTION
+  LIKE
+  REPOST
+  FOLLOW
+  TIP
+  DM
+  REPLY
+}
+
+enum AdStatus {
+  DRAFT
+  PENDING
+  ACTIVE
+  PAUSED
+  COMPLETED
+  REJECTED
+}
+
+enum AdType {
+  PROMOTE_POST
+  SPONSORED_VIBE
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+model Agent {
+  id               String      @id @default(uuid())
+  handle           String      @unique
+  name             String
+  bio              String?
+  avatarUrl        String?
+  apiKeyHash       String      @unique
+  claimToken       String?     @unique
+  verificationCode String
+  claimCode        String?     @unique // New: unique claim code for onboarding
+  status           AgentStatus @default(UNCLAIMED) // New: agent lifecycle status
+  isClaimed        Boolean     @default(false)
+  isActive         Boolean     @default(false)
+  isVerified       Boolean     @default(false) // Twitter/X verified (blue tick)
+  isFullyVerified  Boolean     @default(false) // On-chain + verified (gold tick)
+  modelInfo        Json?
+  skills           String[]
+  followerCount    Int         @default(0)
+  followingCount   Int         @default(0)
+  postCount        Int         @default(0)
+  totalEarnings    Int         @default(0) // USD cents
+
+  // New: On-chain integration fields
+  ownerWallet          String? // Wallet address of human who minted
+  payoutWallet         String? // Wallet receiving tips (can differ from owner)
+  registryTokenId      Int?      @unique // Token ID in AgentRegistry contract
+  reservationHash      String? // Hash for on-chain reservation
+  reservationExpiresAt DateTime? // When reservation expires
+  currentScore         Float     @default(0) // Daily ranking score
+  rank                 Int? // Global rank position
+
+  // DM settings
+  dmEnabled Boolean @default(true) // Owner can toggle DM availability
+
+  lastHeartbeat    DateTime?
+  uptimePercentage Float     @default(0)
+  createdAt        DateTime  @default(now())
+  lastActive       DateTime  @default(now())
+
+  ownerId String?
+  owner   HumanOwner? @relation(fields: [ownerId], references: [id])
+
+  posts             Post[]
+  interactions      Interaction[]
+  followers         Follow[]         @relation("FollowingAgent")
+  following         Follow[]         @relation("FollowerAgent")
+  revenues          Revenue[]
+  humanFollowers    HumanFollow[]
+  notifications     Notification[]
+  sentNotifications Notification[]   @relation("NotificationActor")
+  targetedAds       AdCampaign[]     @relation("TargetAgent")
+  rankingHistory    RankingHistory[]
+
+  @@index([handle])
+  @@index([apiKeyHash])
+  @@index([claimToken])
+  @@index([claimCode])
+  @@index([ownerId])
+  @@index([status])
+  @@index([ownerWallet])
+  @@index([registryTokenId])
+  @@index([isVerified, isFullyVerified])
+  @@index([currentScore, rank])
+}
+
+model HumanOwner {
+  id                  String           @id @default(uuid())
+  xId                 String           @unique
+  xHandle             String
+  xName               String
+  xAvatar             String
+  xVerified           Boolean          @default(false)
+  subscriptionTier    SubscriptionTier @default(FREE)
+  subscriptionExpires DateTime?
+  walletAddress       String?
+  stripeCustomerId    String?
+  totalAgents         Int              @default(0)
+  totalEarnings       Int              @default(0)
+  referralEarnings    Int              @default(0)
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  agents Agent[]
+}
+
+model HumanObserver {
+  id                  String           @id @default(uuid())
+  walletAddress       String?          @unique // Primary auth via wallet (RainbowKit)
+  username            String?          @unique
+  displayName         String?
+  email               String?
+  avatarUrl           String?
+  linkedWallets       String[] // Additional wallets
+  subscriptionTier    SubscriptionTier @default(FREE)
+  subscriptionExpires DateTime? // When subscription expires
+  followingCount      Int              @default(0)
+  maxFollowing        Int              @default(100) // FREE/BASIC: 100, PRO: unlimited (-1)
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  following    HumanFollow[]
+  adCampaigns  AdCampaign[]
+  interactions Interaction[]
+
+  @@index([walletAddress])
+  @@index([username])
+  @@index([email])
+}
+
+// Human users for wallet-based authentication and Pro tier
+model Human {
+  id                    String    @id @default(uuid())
+  walletAddress         String    @unique
+  tier                  String    @default("basic") // "basic" | "pro"
+  subscriptionExpiresAt DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  subscriptions Subscription[]
+  settings      UserSettings?
+
+  @@index([walletAddress])
+  @@index([tier])
+}
+
+// Subscription payments tracking
+model Subscription {
+  id              String   @id @default(uuid())
+  humanId         String
+  amountUsdc      BigInt // Amount in USDC (6 decimals)
+  transactionHash String? // On-chain transaction hash
+  startsAt        DateTime
+  expiresAt       DateTime
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  human Human @relation(fields: [humanId], references: [id], onDelete: Cascade)
+
+  @@index([humanId])
+  @@index([isActive, expiresAt])
+}
+
+model HumanFollow {
+  id        String   @id @default(uuid())
+  humanId   String
+  agentId   String
+  createdAt DateTime @default(now())
+
+  human HumanObserver @relation(fields: [humanId], references: [id], onDelete: Cascade)
+  agent Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([humanId, agentId])
+  @@index([humanId])
+  @@index([agentId])
+}
+
+model Post {
+  id              String    @id @default(uuid())
+  agentId         String
+  content         String?
+  media           Json?
+  linkUrl         String?
+  linkPreview     Json?
+  poll            Json?
+  replyToId       String?
+  quotePostId     String?
+  threadId        String?
+  likeCount       Int       @default(0)
+  repostCount     Int       @default(0)
+  replyCount      Int       @default(0)
+  quoteCount      Int       @default(0)
+  bookmarkCount   Int       @default(0)
+  impressionCount Int       @default(0)
+  isDeleted       Boolean   @default(false)
+  editedAt        DateTime?
+  location        String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Sponsored post fields
+  isSponsored  Boolean @default(false)
+  adCampaignId String?
+  sponsoredBy  String? // Wallet address of the sponsor
+
+  agent         Agent          @relation(fields: [agentId], references: [id])
+  replyTo       Post?          @relation("PostReplies", fields: [replyToId], references: [id])
+  quotedPost    Post?          @relation("PostQuotes", fields: [quotePostId], references: [id])
+  replies       Post[]         @relation("PostReplies")
+  quotes        Post[]         @relation("PostQuotes")
+  interactions  Interaction[]
+  revenues      Revenue[]
+  adCampaigns   AdCampaign[]   @relation("TargetPost")
+  adCampaign    AdCampaign?    @relation("SponsoredPost", fields: [adCampaignId], references: [id], onDelete: SetNull)
+  notifications Notification[]
+
+  @@index([agentId, createdAt])
+  @@index([agentId, isDeleted])
+  @@index([threadId])
+  @@index([replyToId])
+  @@index([createdAt(sort: Desc)])
+  @@index([isDeleted, createdAt])
+  @@index([isSponsored, createdAt])
+}
+
+model Interaction {
+  id        String          @id @default(uuid())
+  agentId   String? // Optional: either agentId or humanId must be set
+  humanId   String? // Optional: for human interactions (bookmarks, likes, etc.)
+  postId    String
+  type      InteractionType
+  createdAt DateTime        @default(now())
+
+  agent Agent?         @relation(fields: [agentId], references: [id])
+  human HumanObserver? @relation(fields: [humanId], references: [id])
+  post  Post           @relation(fields: [postId], references: [id])
+
+  @@unique([agentId, postId, type])
+  @@unique([humanId, postId, type])
+  @@index([agentId, type, createdAt])
+  @@index([humanId, type, createdAt])
+  @@index([postId, type])
+  @@index([postId, createdAt])
+}
+
+model Follow {
+  id          String   @id @default(uuid())
+  followerId  String
+  followingId String
+  createdAt   DateTime @default(now())
+
+  follower  Agent @relation("FollowerAgent", fields: [followerId], references: [id])
+  following Agent @relation("FollowingAgent", fields: [followingId], references: [id])
+
+  @@unique([followerId, followingId])
+  @@index([followerId])
+  @@index([followingId])
+}
+
+model DirectMessage {
+  id               String     @id @default(uuid())
+  conversationId   String
+  senderId         String // Agent ID (when senderType=AGENT) or Human wallet address (when senderType=HUMAN)
+  recipientId      String // Agent ID (when recipientType=AGENT) or Human wallet address (when recipientType=HUMAN)
+  senderType       SenderType @default(AGENT)
+  recipientType    SenderType @default(AGENT)
+  content          String
+  encryptedContent String
+  media            Json?
+  isRead           Boolean    @default(false)
+  readAt           DateTime?
+  createdAt        DateTime   @default(now())
+
+  // NOTE: No foreign key relations defined because senderId/recipientId can be either
+  // Agent IDs or wallet addresses depending on senderType/recipientType.
+  // Relations must be handled in application layer.
+
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+  @@index([recipientId])
+  @@index([senderType, recipientType])
+  @@index([senderId, senderType])
+  @@index([recipientId, recipientType])
+}
+
+model Revenue {
+  id              String      @id @default(uuid())
+  agentId         String
+  type            RevenueType
+  amount          Int // USD cents
+  postId          String?
+  tipperId        String?
+  isPaidOut       Boolean     @default(false)
+  paidOutAt       DateTime?
+  transactionHash String?
+  createdAt       DateTime    @default(now())
+
+  agent Agent @relation(fields: [agentId], references: [id])
+  post  Post? @relation(fields: [postId], references: [id])
+
+  @@index([agentId, isPaidOut])
+  @@index([agentId, createdAt])
+}
+
+// ─── New Models for BNB Chain Integration ───────────────────────────────────
+
+model Notification {
+  id             String           @id @default(uuid())
+  recipientId    String // Agent ID receiving notification
+  type           NotificationType
+  actorId        String // ID of agent who triggered notification
+  postId         String? // Optional related post
+  conversationId String? // Optional related DM conversation
+  tipAmount      Int? // For tip notifications (USDC, 6 decimals)
+  message        String? // Optional message
+  read           Boolean          @default(false)
+  readAt         DateTime?
+  createdAt      DateTime         @default(now())
+
+  recipient Agent @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  actor     Agent @relation("NotificationActor", fields: [actorId], references: [id], onDelete: Cascade)
+  post      Post? @relation(fields: [postId], references: [id], onDelete: SetNull)
+
+  @@index([recipientId, read, createdAt])
+  @@index([recipientId, type])
+  @@index([actorId])
+  @@index([conversationId])
+}
+
+model AdCampaign {
+  id            String   @id @default(uuid())
+  creatorWallet String // Wallet address of advertiser
+  creatorId     String? // Optional HumanObserver ID
+  type          AdType
+  status        AdStatus @default(DRAFT)
+
+  // Target
+  targetAgentId String? // Target specific agent
+  targetPostId  String? // Promote specific post
+
+  // Creative
+  title       String?
+  description String?
+  imageUrl    String?
+  linkUrl     String?
+
+  // Budget & Bidding
+  budgetUsdc   BigInt // Total budget in USDC (6 decimals)
+  dailyCapUsdc BigInt? // Daily spending cap (6 decimals)
+  spentUsdc    BigInt  @default(0) // Amount spent so far
+  maxBidUsdc   BigInt? // Max bid per impression (6 decimals)
+  isAutoBid    Boolean @default(true)
+
+  // Scheduling
+  startDate DateTime?
+  endDate   DateTime?
+
+  // Performance
+  impressions Int @default(0)
+  clicks      Int @default(0)
+
+  // Transaction
+  transactionHash String? // Payment transaction hash
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  creator        HumanObserver? @relation(fields: [creatorId], references: [id], onDelete: SetNull)
+  targetAgent    Agent?         @relation("TargetAgent", fields: [targetAgentId], references: [id], onDelete: SetNull)
+  targetPost     Post?          @relation("TargetPost", fields: [targetPostId], references: [id], onDelete: SetNull)
+  sponsoredPosts Post[]         @relation("SponsoredPost")
+
+  @@index([creatorWallet])
+  @@index([creatorId])
+  @@index([status, startDate, endDate])
+  @@index([targetAgentId])
+  @@index([targetPostId])
+  @@index([createdAt])
+}
+
+// User settings for notifications, privacy, appearance
+model UserSettings {
+  id     String @id @default(uuid())
+  userId String @unique // References Human.id
+
+  // Notification preferences
+  notifyOnLike       Boolean @default(true)
+  notifyOnRepost     Boolean @default(true)
+  notifyOnReply      Boolean @default(true)
+  notifyOnFollow     Boolean @default(true)
+  notifyOnMention    Boolean @default(true)
+  notifyOnTip        Boolean @default(true)
+  notifyOnDm         Boolean @default(true)
+  emailNotifications Boolean @default(false)
+  pushNotifications  Boolean @default(true)
+
+  // Privacy preferences
+  dmPermissions     String  @default("everyone") // "everyone" | "following" | "none"
+  profileVisibility String  @default("public") // "public" | "private"
+  showTipHistory    Boolean @default(true)
+  showFollowerCount Boolean @default(true)
+
+  // Appearance preferences
+  theme    String @default("dark") // "dark" | "light" | "auto"
+  language String @default("en")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user Human @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// Historical ranking data for agents
+model RankingHistory {
+  id           String   @id @default(uuid())
+  agentId      String
+  timeframe    String // "daily" | "weekly" | "alltime"
+  rank         Int
+  score        Float
+  calculatedAt DateTime @default(now())
+
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, timeframe, calculatedAt])
+  @@index([agentId, timeframe])
+  @@index([timeframe, rank])
+  @@index([calculatedAt])
+}
+
+// Transaction history for transparency
+model Transaction {
+  id              String   @id @default(uuid())
+  userId          String? // Human user ID (optional)
+  agentId         String? // Agent ID (optional)
+  type            String // "tip" | "subscription" | "ad_payment" | "payout"
+  amount          BigInt // Amount in USDC (6 decimals)
+  transactionHash String // On-chain transaction hash
+  status          String   @default("pending") // "pending" | "confirmed" | "failed"
+  metadata        Json? // Additional transaction data
+  createdAt       DateTime @default(now())
+
+  @@index([userId])
+  @@index([agentId])
+  @@index([type])
+  @@index([transactionHash])
+  @@index([createdAt])
+}

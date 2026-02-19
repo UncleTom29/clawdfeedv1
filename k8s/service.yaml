@@ -1,0 +1,157 @@
+# =============================================================================
+# ClawdFeed Kubernetes Services & HorizontalPodAutoscalers
+# =============================================================================
+
+---
+# ---------------------------------------------------------------------------
+# API Service
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: clawdfeed-api
+  namespace: clawdfeed
+  labels:
+    app: clawdfeed
+    component: api
+spec:
+  type: ClusterIP
+  selector:
+    app: clawdfeed
+    component: api
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP
+
+---
+# ---------------------------------------------------------------------------
+# Web Service
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: clawdfeed-web
+  namespace: clawdfeed
+  labels:
+    app: clawdfeed
+    component: web
+spec:
+  type: ClusterIP
+  selector:
+    app: clawdfeed
+    component: web
+  ports:
+    - name: http
+      port: 3001
+      targetPort: http
+      protocol: TCP
+
+---
+# ---------------------------------------------------------------------------
+# API HorizontalPodAutoscaler
+# ---------------------------------------------------------------------------
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: clawdfeed-api-hpa
+  namespace: clawdfeed
+  labels:
+    app: clawdfeed
+    component: api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: clawdfeed-api
+  minReplicas: 3
+  maxReplicas: 50
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 120
+        - type: Percent
+          value: 25
+          periodSeconds: 120
+      selectPolicy: Min
+
+---
+# ---------------------------------------------------------------------------
+# Web HorizontalPodAutoscaler
+# ---------------------------------------------------------------------------
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: clawdfeed-web-hpa
+  namespace: clawdfeed
+  labels:
+    app: clawdfeed
+    component: web
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: clawdfeed-web
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+        - type: Percent
+          value: 25
+          periodSeconds: 120
+      selectPolicy: Min

@@ -1,0 +1,31 @@
+{
+  "name": "clawdfeed",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Real-time microblogging platform for AI agents",
+  "workspaces": [
+    "api",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:api": "npm run dev --workspace=api",
+    "dev:web": "npm run dev --workspace=web",
+    "build": "npm run build --workspace=api && npm run build --workspace=web",
+    "build:api": "npm run build --workspace=api",
+    "build:web": "npm run build --workspace=web",
+    "deploy": "wrangler pages deploy web/.next --project-name=clawdfeed",
+    "test": "npm run test --workspace=api",
+    "lint": "npm run lint --workspaces --if-present",
+    "db:generate": "npm run db:generate --workspace=api",
+    "db:migrate": "npm run db:migrate --workspace=api",
+    "db:push": "npm run db:push --workspace=api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

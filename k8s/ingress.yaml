@@ -1,0 +1,135 @@
+# =============================================================================
+# ClawdFeed Kubernetes Ingress
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: clawdfeed-ingress
+  namespace: clawdfeed
+  labels:
+    app: clawdfeed
+    component: ingress
+  annotations:
+    # -------------------------------------------------------------------------
+    # cert-manager TLS
+    # -------------------------------------------------------------------------
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    cert-manager.io/acme-challenge-type: http01
+
+    # -------------------------------------------------------------------------
+    # NGINX Ingress Controller
+    # -------------------------------------------------------------------------
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: 'true'
+    nginx.ingress.kubernetes.io/force-ssl-redirect: 'true'
+    nginx.ingress.kubernetes.io/use-regex: 'true'
+
+    # -------------------------------------------------------------------------
+    # CORS
+    # -------------------------------------------------------------------------
+    nginx.ingress.kubernetes.io/enable-cors: 'true'
+    nginx.ingress.kubernetes.io/cors-allow-origin: 'https://clawdfeed.xyz,https://www.clawdfeed.xyz'
+    nginx.ingress.kubernetes.io/cors-allow-methods: 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+    nginx.ingress.kubernetes.io/cors-allow-headers: 'DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization,X-API-Key'
+    nginx.ingress.kubernetes.io/cors-allow-credentials: 'true'
+    nginx.ingress.kubernetes.io/cors-max-age: '86400'
+
+    # -------------------------------------------------------------------------
+    # Rate Limiting
+    # -------------------------------------------------------------------------
+    nginx.ingress.kubernetes.io/limit-rps: '50'
+    nginx.ingress.kubernetes.io/limit-rpm: '1000'
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: '5'
+    nginx.ingress.kubernetes.io/limit-connections: '20'
+
+    # -------------------------------------------------------------------------
+    # Proxy settings
+    # -------------------------------------------------------------------------
+    nginx.ingress.kubernetes.io/proxy-body-size: '10m'
+    nginx.ingress.kubernetes.io/proxy-read-timeout: '60'
+    nginx.ingress.kubernetes.io/proxy-send-timeout: '60'
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: '10'
+    nginx.ingress.kubernetes.io/proxy-buffer-size: '8k'
+
+    # -------------------------------------------------------------------------
+    # WebSocket support
+    # -------------------------------------------------------------------------
+    nginx.ingress.kubernetes.io/websocket-services: clawdfeed-api
+    nginx.ingress.kubernetes.io/proxy-http-version: '1.1'
+
+    # -------------------------------------------------------------------------
+    # Security headers
+    # -------------------------------------------------------------------------
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+      more_set_headers "Permissions-Policy: camera=(), microphone=(), geolocation=()";
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - clawdfeed.xyz
+        - www.clawdfeed.xyz
+      secretName: clawdfeed-tls-cert
+  rules:
+    # -------------------------------------------------------------------------
+    # clawdfeed.xyz
+    # -------------------------------------------------------------------------
+    - host: clawdfeed.xyz
+      http:
+        paths:
+          # API routes
+          - path: /api(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: clawdfeed-api
+                port:
+                  number: 3000
+          # WebSocket endpoint
+          - path: /ws(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: clawdfeed-api
+                port:
+                  number: 3000
+          # All other traffic goes to the web frontend
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: clawdfeed-web
+                port:
+                  number: 3001
+
+    # -------------------------------------------------------------------------
+    # www.clawdfeed.xyz (redirect handled by web or same config)
+    # -------------------------------------------------------------------------
+    - host: www.clawdfeed.xyz
+      http:
+        paths:
+          - path: /api(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: clawdfeed-api
+                port:
+                  number: 3000
+          - path: /ws(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: clawdfeed-api
+                port:
+                  number: 3000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: clawdfeed-web
+                port:
+                  number: 3001

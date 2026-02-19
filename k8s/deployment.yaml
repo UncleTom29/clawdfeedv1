@@ -1,0 +1,408 @@
+# =============================================================================
+# ClawdFeed Kubernetes Deployments
+# =============================================================================
+
+---
+# ---------------------------------------------------------------------------
+# API Server Deployment
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clawdfeed-api
+  namespace: clawdfeed
+  labels:
+    app: clawdfeed
+    component: api
+    version: latest
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: clawdfeed
+      component: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: clawdfeed
+        component: api
+    spec:
+      serviceAccountName: clawdfeed-api
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      containers:
+        - name: api
+          image: ghcr.io/clawdfeed/api:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: clawdfeed-config
+            - secretRef:
+                name: clawdfeed-secrets
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: API_PORT
+              value: '3000'
+            - name: API_HOST
+              value: '0.0.0.0'
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: clawdfeed-secrets
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: clawdfeed-secrets
+                  key: REDIS_URL
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: clawdfeed-secrets
+                  key: JWT_SECRET
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: '1'
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 12
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+
+---
+# ---------------------------------------------------------------------------
+# Web Frontend Deployment
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clawdfeed-web
+  namespace: clawdfeed
+  labels:
+    app: clawdfeed
+    component: web
+    version: latest
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: clawdfeed
+      component: web
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: clawdfeed
+        component: web
+    spec:
+      serviceAccountName: clawdfeed-web
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      containers:
+        - name: web
+          image: ghcr.io/clawdfeed/web:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3001
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: clawdfeed-web-config
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: '3001'
+            - name: NEXT_PUBLIC_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: clawdfeed-web-config
+                  key: NEXT_PUBLIC_API_URL
+            - name: NEXT_PUBLIC_WS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: clawdfeed-web-config
+                  key: NEXT_PUBLIC_WS_URL
+            - name: NEXT_PUBLIC_APP_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: clawdfeed-web-config
+                  key: NEXT_PUBLIC_APP_URL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 12
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+
+---
+# ---------------------------------------------------------------------------
+# Feed Generation Worker Deployment
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clawdfeed-feed-worker
+  namespace: clawdfeed
+  labels:
+    app: clawdfeed
+    component: feed-worker
+    version: latest
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: clawdfeed
+      component: feed-worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: clawdfeed
+        component: feed-worker
+    spec:
+      serviceAccountName: clawdfeed-api
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      containers:
+        - name: feed-worker
+          image: ghcr.io/clawdfeed/api:latest
+          imagePullPolicy: Always
+          command: ['node', 'dist/workers/feed-generator.js']
+          envFrom:
+            - configMapRef:
+                name: clawdfeed-config
+            - secretRef:
+                name: clawdfeed-secrets
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: FEED_GENERATION_INTERVAL_MS
+              valueFrom:
+                configMapKeyRef:
+                  name: clawdfeed-config
+                  key: FEED_GENERATION_INTERVAL_MS
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: clawdfeed-secrets
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: clawdfeed-secrets
+                  key: REDIS_URL
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - "require('fs').accessSync('/tmp/feed-worker-heartbeat')"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - "require('fs').accessSync('/tmp/feed-worker-heartbeat')"
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+
+---
+# ---------------------------------------------------------------------------
+# Payout Processing Worker Deployment
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clawdfeed-payout-worker
+  namespace: clawdfeed
+  labels:
+    app: clawdfeed
+    component: payout-worker
+    version: latest
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: clawdfeed
+      component: payout-worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: clawdfeed
+        component: payout-worker
+    spec:
+      serviceAccountName: clawdfeed-api
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      containers:
+        - name: payout-worker
+          image: ghcr.io/clawdfeed/api:latest
+          imagePullPolicy: Always
+          command: ['node', 'dist/workers/payout-processor.js']
+          envFrom:
+            - configMapRef:
+                name: clawdfeed-config
+            - secretRef:
+                name: clawdfeed-secrets
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PAYOUT_CRON
+              valueFrom:
+                configMapKeyRef:
+                  name: clawdfeed-config
+                  key: PAYOUT_CRON
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: clawdfeed-secrets
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: clawdfeed-secrets
+                  key: REDIS_URL
+            - name: STRIPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: clawdfeed-secrets
+                  key: STRIPE_SECRET_KEY
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - "require('fs').accessSync('/tmp/payout-worker-heartbeat')"
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - "require('fs').accessSync('/tmp/payout-worker-heartbeat')"
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+      imagePullSecrets:
+        - name: ghcr-pull-secret
